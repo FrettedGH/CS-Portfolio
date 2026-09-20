@@ -328,8 +328,6 @@ class CurrentSource(Component):
         self.Current = self.Current
         self.Power = self.Voltage * self.Current
 
-
-
 class Resistor(Component):
     def __init__(self):
         super().__init__()
@@ -399,7 +397,7 @@ class Capacitor(Component):
                 
         if NodeB is not Ground:
             Matrix[NodeIndexes[NodeB]][NodeIndexes[NodeB]] += Conductance
-            Vector[NodeIndexes[NodeB]] += Conductance * self.PreviousVoltage
+            Vector[NodeIndexes[NodeB]] -= Conductance * self.PreviousVoltage
                 
         if NodeA is not Ground and NodeB is not Ground:
             Matrix[NodeIndexes[NodeA]][NodeIndexes[NodeB]] -= Conductance
@@ -1426,3 +1424,16 @@ Application.exec()
 #SIMULATE
 #Textures
 #Aesthetics
+#
+
+#New plan
+#Have an in built grid on to of the Graphics Scene
+#Have wires and components connected, scaling them
+#Anything on a grid square where a wire is, becomes connected to that component.
+#Have electrons on this grid.
+#
+#
+#
+#
+#
+#
