@@ -97,355 +97,158 @@ class Scene():
         
         for Step in range(Steps):
             for CircuitInstance in self.Circuits:
-                self.Solver.Solve(CircuitInstance, self.TimeStep)
+                self.Solver.solveCircuit(CircuitInstance, self.TimeStep)
             self.SimulationTime += self.TimeStep
+    
+class Solver():
+    def __init__(self):
+        self.Circuit = None
+        self.Timestep = None
+        
+        self.NodeIndexes = {}
+        self.BranchIndexes = {}
+        self.Matrix = None
+        self.Vector = None
+        self.Solution = None
+        
+    def solveCircuit(self, CircuitInstance, TimeStep):
+        self.Circuit = CircuitInstance
+        self.TimeStep = TimeStep
+        
+        self.NodeIndexes = {}
+        
+        for NodeInstance in CircuitInstance.Nodes:
+            if NodeInstance is not CircuitInstance.Ground:
+                self.NodeIndexes[NodeInstance] = len(self.NodeIndexes)
                 
+        self.BranchIndexes = {}
+        Size = len(self.NodeIndexes)
+        
+        for ComponentInstance in CircuitInstance.Components:
+            if ComponentInstance.BranchCount > 0:
+                self.BranchIndexes[ComponentInstance] = Size
+                Size += ComponentInstance.BranchCount
+                
+        self.Matrix = zeros(Size, Size)
+        self.Vector = zeros(Size)
+        
+        for ComponentInstance in CircuitInstance.Components:
+            ComponentInstance.Stamp(self)
+            
+        try:
+            if Size > 0:
+                self.Solution = linalg.solve(self.Matrix, self.Vector)
+            else:
+                self.Solution = zeros(0)
+        except linalg.LinAlgError:
+            CircuitInstance.Error = "Circuit cannot be solved (shorted or parallel voltage sources, or a floating part)"
+            return False
+        
+        for NodeInstance, Index in self.NodeIndexes.items():
+            NodeInstance.Voltage = float(self.Solution[Index])
+            
+        CircuitInstance.Ground.Voltage = 0.0
+        
+        for ComponentInstance in CircuitInstance.Components:
+            ComponentInstance.updateComponent(self)
+            
+        CircuitInstance.Error = None
+        return True
+    
 class Circuit():
     def __init__(self):
         self.Nodes = []
         self.Components = []
-        
-        self.Solved = False
         self.Ground = None
         
     def updateCircuit(self, StartingNode):
         self.Nodes = []
         self.Components = []
-        
         self.Ground = StartingNode
         
-        ConnectedNodes = [StartingNode]
+        VisitedNodes = set()
+        VisitedComponents = set()
         
-        while ConnectedNodes != []:
-            CurrentNode = ConnectedNodes.pop()
+        UnvisitedNodes = [StartingNode]
+        
+        while UnvisitedNodes != []:
+            CurrentNode = UnvisitedNodes.pop()
             
-            if CurrentNode not in self.Nodes: 
+            if CurrentNode not in VisitedNodes:
+                
+                VisitedNodes.add(CurrentNode)
                 CurrentNode.Circuit = self
                 self.Nodes.append(CurrentNode)
                 
-                for Terminal in CurrentNode.Terminals:
-                    Component = Terminal.Component
+                for TerminalInstance in CurrentNode.Terminals:
+                    ComponentInstance = TerminalInstance.Component
                     
-                    if Component not in self.Components:
-                        Component.Circuit = self
-                        self.Components.append(Component)
+                    if ComponentInstance not in VisitedComponents:
                         
-                    for SiblingTerminal in Component.Terminals:
-                        SiblingNode = SiblingTerminal.Node
+                        VisitedComponents.add(ComponentInstance)
+                        ComponentInstance.Circuit = self
+                        self.Components.append(ComponentInstance)
                         
-                        if SiblingNode is not None and SiblingNode not in self.Nodes:
-                            ConnectedNodes.append(SiblingNode)
-
-    def Solve(self, TimeStep):
-        self.TimeStep = TimeStep
-        
-        UnknownNodes = []
-
-        for Node in self.Nodes:
-            if Node is not self.Ground:
-                UnknownNodes.append(Node)
-
-        NodeIndexes = {}
-
-        for Index, Node in enumerate(UnknownNodes):
-            NodeIndexes[Node] = Index
-
-        BranchComponents = []
-
-        for Component in self.Components:
-            if isinstance(Component, VoltageSource):
-                BranchComponents.append(Component)
-
-        BranchIndexes = {}
-
-        for Index, Source in enumerate(BranchComponents):
-            BranchIndexes[Source] = Index      
-
-        MatrixSize = len(UnknownNodes) + len(BranchComponents)
-
-        Matrix = zeros((MatrixSize, MatrixSize))
-        Vector = zeros(MatrixSize)
-
-        for Component in self.Components:
-            Component.Stamp(Matrix, Vector, NodeIndexes, BranchIndexes, self.Ground, TimeStep)
-
-        Solution = linalg.solve(Matrix, Vector)
-
-        for Node, Index in NodeIndexes.items():
-            Node.Voltage = Solution[Index]
-
-        self.Ground.Voltage = 0
-
-        for Component in self.Components:
-            Component.updateComponent(Solution, BranchIndexes, NodeIndexes)
-            
-        self.Solved = True
-        
+                        for CounterpartTerminal in ComponentInstance.Terminals:
+                            UnvisitedNodes.append(CounterpartTerminal.Node)
+                
 class Node():
     def __init__(self):
         self.Circuit = None
         self.Terminals = []
         self.Connections = []
-
+        
         self.Voltage = None
         
     def updateNode(self, StartingTerminal):
         self.Terminals = []
         self.Connections = []
         
-        ConnectedTerminals = [StartingTerminal]
+        VisitedTerminals = set()
+        VisitedConnections = set()
         
-        while ConnectedTerminals != []:
-            CurrentTerminal = ConnectedTerminals.pop()
+        UnvisitedTerminals = [StartingTerminal]
+        
+        while UnvisitedTerminals != []:
+            CurrentTerminal = UnvisitedTerminals.pop()
             
-            if CurrentTerminal not in self.Terminals:
+            if CurrentTerminal not in VisitedTerminals:
                 
+                VisitedTerminals.add(CurrentTerminal)
                 CurrentTerminal.Node = self
                 self.Terminals.append(CurrentTerminal)
                 
-                for Connection in CurrentTerminal.Connections:
-                    
-                    if Connection not in self.Connections:
+                for ConnectionInstance in CurrentTerminal.Connections:
+                    if ConnectionInstance not in VisitedConnections:
                         
-                        self.Connections.append(Connection)
+                        VisitedConnections.add(ConnectionInstance)
+                        self.Connections.append(ConnectionInstance)
                         
-                    OtherTerminal = Connection.getOtherTerminal(CurrentTerminal)
-                    
-                    if OtherTerminal not in self.Terminals:
-                        ConnectedTerminals.append(OtherTerminal)
-        
+                    UnvisitedTerminals.append(ConnectionInstance.getRemoteTerminal(CurrentTerminal))
+    
 class Connection():
     def __init__(self, TerminalA, TerminalB):
         self.TerminalA = TerminalA
         self.TerminalB = TerminalB
 
-    def getOtherTerminal(self, Terminal):
-        if Terminal is self.TerminalA:
+    def getRemoteTerminal(self, TerminalInstance):
+        if TerminalInstance is self.TerminalA:
             return self.TerminalB
-        if Terminal is self.TerminalB:
+        if TerminalInstance is self.TerminalB:
             return self.TerminalA
-        
+
 class Terminal():
-    def __init__(self, Component):
-        self.Component = Component
-        self.Node = None
+    def __init__(self, ComponentInstance):
+        self.Component = ComponentInstance
         self.Connections = []
- 
-class Component(): 
+        self.Node = None
+    
+class Component():
     def __init__(self):
         self.Terminals = []
-        self.Circuit = None
         self.Scene = None
-
-        self.Voltage = None
-        self.Current = None
-        self.Power = None
+        self.Circuit = None
         
-        self.Resistance = None
-        self.Capacitance = None
-        self.Inductance = None
-        
-        self.PreviousVoltage = None
-        self.PreviousCurrent = None
-
-class VoltageSource(Component): #CHECK
-    def __init__(self):
-        super().__init__()
-
-        self.Negative = Terminal(self)
-        self.Positive = Terminal(self)
-
-        self.Terminals.extend([self.Negative, self.Positive])
-
-    def setVoltage(self, Voltage): #setParameter? ~CONSISTENCY~
-        self.Voltage = Voltage
-        
-        if self.Circuit is not None:
-            self.Circuit.Solved = False
-        
-    def Stamp(self, Matrix, Vector, NodeIndexes, BranchIndexes, Ground, TimeStep):
-
-        PositiveNode = self.Positive.Node
-        NegativeNode = self.Negative.Node 
-
-        MatrixIndex = len(NodeIndexes) + BranchIndexes[self]
-
-        if PositiveNode is not Ground:
-            Matrix[NodeIndexes[PositiveNode]][MatrixIndex] += 1
-            Matrix[MatrixIndex][NodeIndexes[PositiveNode]] += 1
-
-        if NegativeNode is not Ground:
-            Matrix[NodeIndexes[NegativeNode]][MatrixIndex] -= 1
-            Matrix[MatrixIndex][NodeIndexes[NegativeNode]] -= 1
-
-        Vector[MatrixIndex] += self.Voltage
-
-    def updateComponent(self, Solution, BranchIndexes, NodeIndexes):
-
-        self.Voltage = self.Voltage
-        self.Current = Solution[len(NodeIndexes) + BranchIndexes[self]]
-        self.Power = self.Voltage * self.Current
-
-class CurrentSource(Component):
-    def __init__(self):
-        super().__init__()        
-
-        self.Negative = Terminal(self)
-        self.Positive = Terminal(self)
-
-        self.Terminals.extend([self.Negative, self.Positive])
-
-    def setCurrent(self, Current):
-        self.Current = Current
-        
-        if self.Circuit is not None:
-            self.Circuit.Solved = False
-
-    def Stamp(self, Matrix, Vector, NodeIndexes, BranchIndexes, Ground, TimeStep):
-
-        PositiveNode = self.Positive.Node
-        NegativeNode = self.Negative.Node
-
-        if PositiveNode is not Ground:
-            Vector[NodeIndexes[PositiveNode]] += self.Current
-
-        if NegativeNode is not Ground:
-            Vector[NodeIndexes[NegativeNode]] -= self.Current
-
-    def updateComponent(self, Solution, BranchIndexes, NodeIndexes):
-
-        self.Voltage = self.Positive.Node.Voltage - self.Negative.Node.Voltage
-        self.Current = self.Current
-        self.Power = self.Voltage * self.Current
-
-class Resistor(Component):
-    def __init__(self):
-        super().__init__()
-
-        self.T1 = Terminal(self)
-        self.T2 = Terminal(self)
-
-        self.Terminals.extend([self.T1, self.T2])
-
-    def setResistance(self, Resistance):
-        self.Resistance = Resistance
-        
-        if self.Circuit is not None:
-            self.Circuit.Solved = False
-
-    def Stamp(self, Matrix, Vector, NodeIndexes, BranchIndexes, Ground, TimeStep):
-
-        Conductance = 1/self.Resistance
-
-        NodeA = self.T1.Node
-        NodeB = self.T2.Node
-
-        if NodeA is not Ground:
-            Matrix[NodeIndexes[NodeA]][NodeIndexes[NodeA]] += Conductance
-
-        if NodeB is not Ground:
-            Matrix[NodeIndexes[NodeB]][NodeIndexes[NodeB]] += Conductance
-
-        if NodeA is not Ground and NodeB is not Ground:
-            Matrix[NodeIndexes[NodeA]][NodeIndexes[NodeB]] -= Conductance
-            Matrix[NodeIndexes[NodeB]][NodeIndexes[NodeA]] -= Conductance
-
-    def updateComponent(self, Solution, BranchIndexes, NodeIndexes):
-
-        self.Voltage = abs(self.T1.Node.Voltage - self.T2.Node.Voltage)
-        self.Current = self.Voltage / self.Resistance
-        self.Power = self.Voltage * self.Current
-
-class Capacitor(Component):
-    def __init__(self):
-        super().__init__()
-
-        self.T1 = Terminal(self)
-        self.T2 = Terminal(self)
-        
-        self.Terminals.extend([self.T1, self.T2])
-        
-        self.PreviousVoltage = 0
-        
-        
-    def setCapacitance(self, Capacitance):
-        self.Capacitance = Capacitance
-            
-        if self.Circuit is not None:
-            self.Circuit.Solved = False
-                
-    def Stamp(self, Matrix, Vector, NodeIndexes, BranchIndexes, Ground, TimeStep): # Timestep to others [Useful variable for diodes and dynamic passives]
-            
-        Conductance = self.Capacitance / TimeStep
-            
-        NodeA = self.T1.Node
-        NodeB = self.T2.Node
-            
-        if NodeA is not Ground:
-            Matrix[NodeIndexes[NodeA]][NodeIndexes[NodeA]] += Conductance
-            Vector[NodeIndexes[NodeA]] += Conductance * self.PreviousVoltage
-                
-        if NodeB is not Ground:
-            Matrix[NodeIndexes[NodeB]][NodeIndexes[NodeB]] += Conductance
-            Vector[NodeIndexes[NodeB]] -= Conductance * self.PreviousVoltage
-                
-        if NodeA is not Ground and NodeB is not Ground:
-            Matrix[NodeIndexes[NodeA]][NodeIndexes[NodeB]] -= Conductance
-            Matrix[NodeIndexes[NodeB]][NodeIndexes[NodeA]] -= Conductance
-                
-    def updateComponent(self, Solution, BranchIndexes, NodeIndexes):
-            
-        self.Voltage = abs(self.T1.Node.Voltage - self.T2.Node.Voltage)
-        self.Current = self.Capacitance * (self.Voltage - self.PreviousVoltage) / self.Circuit.TimeStep
-        self.Power = self.Voltage * self.Current
-            
-        self.PreviousVoltage = self.Voltage
-            
-class Inductor(Component):
-    def __init__(self):
-        super().__init__()
-        
-        self.T1 = Terminal(self)
-        self.T2 = Terminal(self)
-        
-        self.Terminals.extend([self.T1, self.T2])
-        
-        self.PreviousCurrent = 0
-        
-    def setInductance(self, Inductance):
-        self.Inductance = Inductance
-        
-        if self.Circuit is not None:
-            self.Circuit.Solved = False
-            
-    def Stamp(self, Matrix, Vector, NodeIndexes, BranchIndexes, Ground, TimeStep):
-        
-        Resistance = self.Inductance / TimeStep
-        
-        NodeA = self.T1.Node
-        NodeB = self.T2.Node
-      
-        MatrixIndex = len(NodeIndexes) + BranchIndexes[self]
-        
-        if NodeA is not Ground:
-            Matrix[NodeIndexes[NodeA]][MatrixIndex] += 1
-            Matrix[MatrixIndex][NodeIndexes[NodeA]] += 1
-                
-        if NodeB is not Ground:
-            Matrix[NodeIndexes[NodeB]][MatrixIndex] -= 1
-            Matrix[MatrixIndex][NodeIndexes[NodeB]] -= 1
-                
-        Matrix[MatrixIndex][MatrixIndex] -= Resistance
-        Vector[MatrixIndex] -= Resistance * self.PreviousCurrent
-        
-    def updateComponent(self, Solution, BranchIndexes, NodeIndexes):
-        
-        self.Voltage = abs(self.T1.Node.Voltage - self.T2.Node.Voltage)
-        self.Current = Solution[len(NodeIndexes) + BranchIndexes[self]]
-        self.Power = self.Voltage * self.Current
-        
-        self.PreviousCurrent = self.Current
-
 """DemoScene = Scene()
 
 V1 = VoltageSource()
