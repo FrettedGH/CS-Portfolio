@@ -26,89 +26,79 @@ from math import inf
 
 class Scene():
     def __init__(self):
-        self.Circuits = []
         self.Components = []
+        self.Connections = []
+
         self.Nodes = []
-        self.Connections = []   
+        self.Circuits = []
         
-        self.TimeStep = 0.01 
-        self.SimulationTime  = 0.0
-
-    def addComponent(self, Component):
-        self.Components.append(Component)
-        Component.Scene = self
+        self.Solver = Solver()
+        self.TimeStep = 0.01
+        self.SimulationTime = 0.0
         
-        #Component Naming here...
-
-    def removeComponent(self, Component):
-
-        for Terminal in Component.Terminals:
-            for Connection in list(Terminal.Connections):
-                self.removeConnection(Terminal, Connection.getOtherTerminal(Terminal))
-
-        self.Components.remove(Component)
-
+    def addComponent(self, ComponentInstance):
+        self.Components.append(ComponentInstance)
+        ComponentInstance.Scene = self
+        self.unresolvedTopology = True
+        
+    def removeComponent(self, ComponentInstance):
+        for TerminalInstance in ComponentInstance.Terminals:
+            for ConnectionInstance in list(TerminalInstance.Connections):
+                self.removeConnection(TerminalInstance, ConnectionInstance.getRemoteTerminal(TerminalInstance))
+                
+        self.Components.remove(ComponentInstance)
+        ComponentInstance.Scene = None
+        self.unresolvedTopology = True
+        
     def addConnection(self, TerminalA, TerminalB):
         NewConnection = Connection(TerminalA, TerminalB)
         TerminalA.Connections.append(NewConnection)
         TerminalB.Connections.append(NewConnection)
         self.Connections.append(NewConnection)
-
+        self.unresolvedTopology = True
+        
     def removeConnection(self, TerminalA, TerminalB):
-
-        for Connection in list(TerminalA.Connections):
-            if Connection.getOtherTerminal(TerminalA) is TerminalB:
-
-                self.Connections.remove(Connection)
-
-                TerminalA.Connections.remove(Connection)
-                TerminalB.Connections.remove(Connection)
-                
+        for ConnectionInstance in list(TerminalA.Connections):
+            if ConnectionInstance.getRemoteTerminal(TerminalA) is TerminalB:
+                self.Connections.remove(ConnectionInstance)
+                TerminalA.Connections.remove(ConnectionInstance)
+                TerminalB.Connections.remove(ConnectionInstance)
+        self.unresolvedTopology = True
+    
     def updateScene(self):
-        self.Nodes = []
-        
-        Component = None
-        
-        for Component in self.Components:
-            Component.Circuit = None
-            for Terminal in Component.Terminals:
-                Terminal.Node = None #Prayers
-        
-        for Component in self.Components:
-            for Terminal in Component.Terminals:
-                if Terminal.Node is None:
-                    NewNode = Node()
-                    
-                    NewNode.updateNode(Terminal)
-                    
-                    self.Nodes.append(NewNode)
-                
-        self.Circuits = []
-        
-        for NodeInstance in self.Nodes:
-            if NodeInstance.Circuit is None:
-                NewCircuit = Circuit()
-                
-                NewCircuit.updateCircuit(NodeInstance)
-                
-                self.Circuits.append(NewCircuit)
-                
-        for CircuitInstance in self.Circuits:
-            if CircuitInstance.Solved == False:
-                CircuitInstance.Solve(self.TimeStep)
-                
-    def SimulationStep(self, Steps = 1):
-        if self.Circuits != []:
-            self.updateScene()
+        if self.unresolvedTopology == True:
             
+            for ComponentInstance in self.Components:
+                ComponentInstance.Circuit = None
+                for TerminalInstance in ComponentInstance.Terminals:
+                    TerminalInstance.Node = None
+                    
+            self.Nodes = []
+            
+            for ComponentInstance in self.Components:
+                for TerminalInstance in ComponentInstance.Terminals:
+                    if TerminalInstance.Node is None:
+                        NewNode = Node()
+                        NewNode.updateNode(TerminalInstance)
+                        self.Nodes.append(NewNode)
+                        
+            self.Circuits = []
+            
+            for NodeInstance in self.Nodes:
+                if NodeInstance.Circuit is None:
+                    NewCircuit = Circuit()
+                    NewCircuit.updateCircuit(NodeInstance)
+                    self.Circuits.append(NewCircuit)
+                    
+            self.unresolvedTopology = False
+            
+    def SimulationStep(self, Steps = 1):
+        self.updateScene()
+        
         for Step in range(Steps):
             for CircuitInstance in self.Circuits:
-                CircuitInstance.Solve(self.TimeStep)
+                self.Solver.Solve(CircuitInstance, self.TimeStep)
             self.SimulationTime += self.TimeStep
-            
-            
-            #Terminal order determines flow of current and voltage?
-            #How to fix....?
                 
 class Circuit():
     def __init__(self):
