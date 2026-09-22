@@ -36,10 +36,14 @@ class Scene():
         self.TimeStep = 0.01
         self.SimulationTime = 0.0
         
+        self.UnresolvedTopology = True
+        self.Errors = []
+        
     def addComponent(self, ComponentInstance):
         self.Components.append(ComponentInstance)
         ComponentInstance.Scene = self
         self.unresolvedTopology = True
+        return ComponentInstance
         
     def removeComponent(self, ComponentInstance):
         for TerminalInstance in ComponentInstance.Terminals:
@@ -96,9 +100,17 @@ class Scene():
         self.updateScene()
         
         for Step in range(Steps):
+            self.Errors = []
             for CircuitInstance in self.Circuits:
-                self.Solver.solveCircuit(CircuitInstance, self.TimeStep)
+                if not self.Solver.solveCircuit(CircuitInstance, self.TimeStep):
+                    self.Errors.append(CircuitInstance.Error)
+                    
+            if self.Errors != []:
+                return False
+                
             self.SimulationTime += self.TimeStep
+            
+        return True
     
 class Solver():
     def __init__(self):
@@ -129,11 +141,11 @@ class Solver():
                 self.BranchIndexes[ComponentInstance] = Size
                 Size += ComponentInstance.BranchCount
                 
-        self.Matrix = zeros(Size, Size)
+        self.Matrix = zeros((Size, Size))
         self.Vector = zeros(Size)
         
         for ComponentInstance in CircuitInstance.Components:
-            ComponentInstance.Stamp(self)
+            ComponentInstance.stampComponent(self)
             
         try:
             if Size > 0:
@@ -154,6 +166,48 @@ class Solver():
             
         CircuitInstance.Error = None
         return True
+    
+    def getNodeIndex(self, TerminalInstance):
+        if TerminalInstance.Node is self.Circuit.Ground:
+            return None
+        return self.NodeIndexes[TerminalInstance.Node]
+    
+    def getBranchIndex(self, ComponentInstance, Number = 0):
+        return self.BranchIndexes[ComponentInstance] + Number
+    
+    def getVoltage(self, TerminalInstance):
+        Index = self.getNodeIndex(TerminalInstance)
+        if Index is None:
+            return 0.0
+        else:
+            return float(self.Solution[Index])
+
+    def getBranchCurrent(self, ComponentInstance, Number = 0):
+        return float(self.Solution[self.getBranchIndex(ComponentInstance, Number)])
+    
+    def addMatrix(self, Row, Column, Value):
+        if Row is not None and Column is not None:
+            self.Matrix[Row][Column] += Value
+        
+    def addVector(self, Row, Value):
+        if Row is not None:
+            self.Vector[Row] += Value
+            
+    def stampBranch(self, NodeIndexA, NodeIndexB, Branch):
+        self.addMatrix(NodeIndexA, Branch, 1)
+        self.addMatrix(NodeIndexB, Branch, -1)
+        self.addMatrix(Branch, NodeIndexA, 1)
+        self.addMatrix(Branch, NodeIndexB, -1)
+        
+    def stampConductance(self, NodeIndexA, NodeIndexB, Value):
+        self.addMatrix(NodeIndexA, NodeIndexA, Value)
+        self.addMatrix(NodeIndexB, NodeIndexB, Value)
+        self.addMatrix(NodeIndexA, NodeIndexB, -Value)
+        self.addMatrix(NodeIndexB, NodeIndexA, -Value)
+        
+    def stampCurrent(self, NodeIndexA, NodeIndexB, Value):
+        self.addVector(NodeIndexA, Value)
+        self.addVector(NodeIndexB, -Value)
     
 class Circuit():
     def __init__(self):
@@ -244,10 +298,160 @@ class Terminal():
         self.Node = None
     
 class Component():
+    BranchCount = 0
     def __init__(self):
         self.Terminals = []
         self.Scene = None
         self.Circuit = None
+        
+        self.Voltage = None
+        self.Current = None
+        self.Power = None
+        
+    def addTerminal(self):
+        NewTerminal = Terminal(self)
+        self.Terminals.append(NewTerminal)
+        return NewTerminal
+    
+    def stampComponent(self, Solver):
+        pass
+    
+    def updateComponent(self, Solver):
+        pass
+    
+    def setResult(self, Voltage, Current):
+        self.Voltage = Voltage
+        self.Current = Current
+        self.Power = Voltage * Current
+
+class VoltageSource(Component):
+    BranchCount = 1
+    def __init__(self):
+        super().__init__()
+        
+        self.Positive = self.addTerminal()
+        self.Negative = self.addTerminal()
+       
+        self.SourceVoltage = None 
+        
+    def setVoltage(self, Voltage):
+        self.SourceVoltage = Voltage
+        
+    def stampComponent(self, Solver):
+        Branch = Solver.getBranchIndex(self)
+        
+        Solver.stampBranch(Solver.getNodeIndex(self.Positive), Solver.getNodeIndex(self.Negative), Branch)
+        Solver.addVector(Branch, self.SourceVoltage)
+        
+    def updateComponent(self, Solver):
+        Voltage = Solver.getVoltage(self.Positive) - Solver.getVoltage(self.Negative)
+        Current = Solver.getBranchCurrent(self)
+        
+        self.setResult(Voltage, Current)
+
+class CurrentSource(Component):
+    def __init__(self):
+        super().__init__()
+        
+        self.Positive = self.addTerminal()
+        self.Negative = self.addTerminal()
+        
+        self.SourceCurrent = None
+        
+    def setCurrent(self, Current):
+        self.SourceCurrent = Current
+        
+    def stampComponent(self, Solver):
+        Solver.stampCurrent(Solver.getNodeIndex(self.Positive), Solver.getNodeIndex(self.Negative), self.SourceCurrent)
+        
+    def updateComponent(self, Solver):
+        Voltage = Solver.getVoltage(self.Positive) - Solver.getVoltage(self.Negative)
+        Current = -self.SourceCurrent
+        
+        self.setResult(Voltage, Current)
+
+class Resistor(Component):
+    def __init__(self):
+        super().__init__()
+        
+        self.T1 = self.addTerminal()
+        self.T2 = self.addTerminal()
+        
+        self.Resistance = None
+        
+    def setResistance(self, Resistance):
+        self.Resistance = Resistance
+        
+    def stampComponent(self, Solver):
+        Conductance = 1 / self.Resistance
+        
+        Solver.stampConductance(Solver.getNodeIndex(self.T1), Solver.getNodeIndex(self.T2), Conductance)
+        
+    def updateComponent(self, Solver):
+        Voltage = Solver.getVoltage(self.T1) - Solver.getVoltage(self.T2)
+        Current = Voltage / self.Resistance
+        
+        self.setResult(Voltage, Current)
+        
+class Capacitor(Component):
+    def __init__(self):
+        super().__init__()
+        
+        self.T1 = self.addTerminal()
+        self.T2 = self.addTerminal()
+        
+        self.Capacitance = None
+        
+        self.PreviousVoltage = 0.0
+        
+    def setCapacitance(self, Capacitance):
+        self.Capacitance = Capacitance
+
+    def stampComponent(self, Solver):
+        Conductance = self.Capacitance / Solver.TimeStep
+        Equivalent = Conductance * self.PreviousVoltage
+        
+        Solver.stampConductance(Solver.getNodeIndex(self.T1), Solver.getNodeIndex(self.T2), Conductance)
+        Solver.stampCurrent(Solver.getNodeIndex(self.T1), Solver.getNodeIndex(self.T2), Equivalent)
+        
+    def updateComponent(self, Solver):
+        Voltage = Solver.getVoltage(self.T1) - Solver.getVoltage(self.T2)
+        Conductance = self.Capacitance / Solver.TimeStep
+        Equivalent = Conductance * self.PreviousVoltage
+        Current = Conductance * Voltage - Equivalent
+ 
+        self.setResult(Voltage, Current)
+        self.PreviousVoltage = Voltage
+        
+class Inductor(Component):
+    BranchCount = 1
+    def __init__(self):
+        super().__init__()
+        
+        self.T1 = self.addTerminal()
+        self.T2 = self.addTerminal()
+        
+        self.Inductance = None
+        
+        self.PreviousCurrent = 0.0
+        
+    def setInductance(self, Inductance):
+        self.Inductance = Inductance
+        
+    def stampComponent(self, Solver):
+        Branch = Solver.getBranchIndex(self)
+        Resistance = self.Inductance / Solver.TimeStep
+        
+        Solver.stampBranch(Solver.getNodeIndex(self.T1), Solver.getNodeIndex(self.T2), Branch)
+        Solver.addMatrix(Branch, Branch, -Resistance)
+        Solver.addVector(Branch, -Resistance * self.PreviousCurrent)
+        
+    def updateComponent(self, Solver):
+        Voltage = Solver.getVoltage(self.T1) - Solver.getVoltage(self.T2)
+        Current = Solver.getBranchCurrent(self)
+        
+        self.setResult(Voltage, Current)
+        self.PreviousCurrent = Current
         
 """DemoScene = Scene()
 
