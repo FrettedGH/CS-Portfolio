@@ -2,10 +2,11 @@ import sys
 import json
 import heapq
 
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QToolBar, QGraphicsView, QGraphicsScene
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGraphicsView, QGraphicsScene
+from PySide6.QtCore import Qt, QObject, Signal
 
 from numpy import linalg, zeros
+from collections import deque
 
 class Scene():
     def __init__(self):
@@ -445,19 +446,138 @@ class Inductor(Component):
 
 #-----------------------------------------------------------------------------------------------------------------------------------------#
 
-class SceneAdapter():
-    def __init__(self):
-        pass
+class ComponentAdapter(QObject):
     
+    ValueChanged = Signal()
+    Updated = Signal()
 
+    def __init__(self, ComponentInstance):
+        super().__init__()
+        
+        self.Component = ComponentInstance
+        self.History = deque()
+        
+        self.HistoryDuration = 60.0
+                
+    def RecordStep(self, Time):
+        self.History.append((Time, self.Component.Voltage, self.Component.Current))
 
+        while self.History and (Time - self.History[0][0]) > self.HistoryDuration:
+            self.History.popleft()
 
+        self.Updated.emit()
+        
+class VoltageSourceAdapter(ComponentAdapter):
+    def setVoltage(self, Voltage):
+        self.Component.setVoltage(Voltage)
+        self.ValueChanged.emit()
+ 
+class CurrentSourceAdapter(ComponentAdapter):
+    def setCurrent(self, Current):
+        self.Component.setCurrent(Current)
+        self.ValueChanged.emit()        
 
+class ResistorAdapter(ComponentAdapter):
+    def setResistance(self, Resistance):
+        self.Component.setResistance(Resistance)
+        self.ValueChanged.emit()
+ 
+class CapacitorAdapter(ComponentAdapter):
+    def setCapacitance(self, Capacitance):
+        self.Component.setCapacitance(Capacitance)
+        self.ValueChanged.emit()
+ 
+class InductorAdapter(ComponentAdapter):
+    def setInductance(self, Inductance):
+        self.Component.setInductance(Inductance)
+        self.ValueChanged.emit()
+   
+class SceneAdapter(QObject):
+    
+    ComponentAdded = Signal()
+    ComponentRemoved = Signal()
+    AcceptedStep = Signal()
+    ErrorRaised = Signal()
+    
+    ComponentTypes = {"VoltageSource": (VoltageSource, VoltageSourceAdapter),
+                      "CurrentSource": (CurrentSource, CurrentSourceAdapter),
+                      "Resistor":      (Resistor,      ResistorAdapter),
+                      "Capacitor":     (Capacitor,     CapacitorAdapter),
+                      "Inductor":      (Inductor,      InductorAdapter), }    
+    
+    def __init__(self):
+        super().__init__()
+        
+        self.Scene = Scene()
+        self.ComponentAdapters = []
+    
+    def createComponent(self, TypeName):
+        BackendClass, AdapterClass = self.ComponentTypes[TypeName]
+        
+        NewComponent = BackendClass()
+        self.Scene.addComponent(NewComponent)
+        
+        NewAdapter = AdapterClass(NewComponent, self)
+        self.ComponentAdapters.append(NewAdapter)
+        
+        self.ComponentAdded.emit(NewAdapter)
+        return NewAdapter
+    
+    def deleteComponent(self, ComponentAdapterInstance):
+        self.Scene.removeComponent(ComponentAdapterInstance.Component)
+        self.ComponentAdapters.remove(ComponentAdapterInstance)
+        
+        self.ComponentRemoved.emit(ComponentAdapterInstance)
+        ComponentAdapterInstance.setParent(None)
+    
+    def createConnection(self, TerminalA, TerminalB):
+        self.Scene.addConnection(TerminalA, TerminalB)
+    
+    def deleteConnection(self, TerminalA, TerminalB):
+        self.Scene.addConnection(TerminalA, TerminalB)
+    
+    def SimulationStep(self, Steps = 1):
+        for Step in range(Steps):
+            if not self.Scene.SimulationStep(1):
+                self.ErrorRaised.emit(list(self.Scene.Errors))
+                return False
 
-
-
+            for ComponentAdapterInstance in self.ComponentAdapters:
+                ComponentAdapterInstance.RecordStep(self.Scene.SimulationTime)
+                
+            self.AcceptedStep.emit(self.Scene.SimulationTime)
+ 
 #-----------------------------------------------------------------------------------------------------------------------------------------#
 
+class CategoryBar(QWidget):
+    def __init__(self):
+        super().__init__()
+ 
+        self.setStyleSheet("background-color: #001C40; color: #79ccff; margin: 5px")
+ 
+        Layout = QVBoxLayout(self)
+        Layout.setContentsMargins(0, 0, 0, 0)
+        Layout.addWidget(QLabel("Category Bar"))    
+        
+class ComponentBar(QWidget):
+    def __init__(self):
+        super().__init__()
+        
+        self.setStyleSheet("background-color: #001C40; color: #79ccff; margin: 5px")
+ 
+        Layout = QVBoxLayout(self)
+        Layout.setContentsMargins(0, 0, 0, 0)
+        Layout.addWidget(QLabel("Component Bar"))        
+
+class OscilloscopePanel(QWidget):
+    def __init__(self):
+        super().__init__()
+    
+        self.setStyleSheet("background-color: #001C40; color: #79ccff; margin: 5px")
+        
+        Layout = QVBoxLayout(self)
+        Layout.setContentsMargins(0, 0, 0, 0)
+        Layout.addWidget(QLabel("Oscilloscope"))
 
 class SimulationPanel(QWidget):
     def __init__(self):
@@ -469,26 +589,6 @@ class SimulationPanel(QWidget):
         Layout.setContentsMargins(0, 0, 0, 0)
         Layout.addWidget(QLabel("SimulationPanel"))
     
-class ComponentPalette(QWidget):
-    def __init__(self):
-        super().__init__()
-        
-        self.setStyleSheet("background-color: #001C40; color: #79ccff; margin: 5px")      
-        
-        Layout = QVBoxLayout(self)
-        Layout.setContentsMargins(0, 0, 0, 0)
-        Layout.addWidget(QLabel("Component Palette"))
-    
-class OscilloscopePanel(QWidget):
-    def __init__(self):
-        super().__init__()
-    
-        self.setStyleSheet("background-color: #001C40; color: #79ccff; margin: 5px")
-        
-        Layout = QVBoxLayout(self)
-        Layout.setContentsMargins(0, 0, 0, 0)
-        Layout.addWidget(QLabel("Oscilloscope"))
-    
 class ToolBar(QWidget):
     def __init__(self):
         super().__init__()
@@ -498,6 +598,16 @@ class ToolBar(QWidget):
         Layout = QVBoxLayout(self)
         Layout.setContentsMargins(0, 0, 0, 0)
         Layout.addWidget(QLabel("ToolBar"))
+        
+class StatusBar(QWidget):
+    def __init__(self):
+        super().__init__()
+        
+        self.setStyleSheet("background-color: #001C40; color: #79ccff; margin: 5px")
+        
+        Layout = QVBoxLayout(self)
+        Layout.setContentsMargins(0, 0, 0, 0)
+        Layout.addWidget(QLabel("StatusBar"))
     
 class CanvasView(QGraphicsView):
     def __init__(self):
@@ -517,24 +627,27 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("SPICE Simulator")
         self.resize(1400, 900)
         
-        
-        
-        self.SimulationPanel = SimulationPanel()
-        self.ComponentPalette = ComponentPalette()
-        self.OscilloscopePanel = OscilloscopePanel()
-        
-        ControlPanel = QWidget()
-        ControlPanelLayout = QVBoxLayout(ControlPanel)
-        ControlPanelLayout.setContentsMargins(0, 0, 0, 0)
-        ControlPanelLayout.setSpacing(0)
-        
-        ControlPanelLayout.addWidget(self.SimulationPanel, 1)
-        ControlPanelLayout.addWidget(self.ComponentPalette, 5)
-        ControlPanelLayout.addWidget(self.OscilloscopePanel, 2)
-        
-        
+        #-------------------------------------------------#
         
         self.ToolBar = ToolBar()
+        
+        self.StatusBar = StatusBar()
+        
+        #-------------------------------------------------#
+        
+        self.CategoryBar = CategoryBar()
+        self.ComponentBar = ComponentBar()
+        
+        PalettePanel = QWidget()
+        PalettePanelLayout = QHBoxLayout(PalettePanel)
+        PalettePanelLayout.setContentsMargins(0, 0, 0, 0)
+        PalettePanelLayout.setSpacing(0)
+ 
+        PalettePanelLayout.addWidget(self.CategoryBar, 1)
+        PalettePanelLayout.addWidget(self.ComponentBar, 2)        
+        
+        #--------------------------------------------------#
+        
         self.CanvasView = CanvasView()
         
         CanvasPanel = QWidget()
@@ -542,18 +655,44 @@ class MainWindow(QMainWindow):
         CanvasPanelLayout.setContentsMargins(0, 0, 0, 0)
         CanvasPanelLayout.setSpacing(0)
         
-        CanvasPanelLayout.addWidget(self.ToolBar, 1)
-        CanvasPanelLayout.addWidget(self.CanvasView, 11)
+        CanvasPanelLayout.addWidget(self.CanvasView)
         
+        #--------------------------------------------------#
         
+        self.OscilloscopePanel = OscilloscopePanel()
+        self.SimulationPanel = SimulationPanel()
+        self.PlaceHolder = QWidget()
         
+        ControlPanel = QWidget()
+        ControlPanelLayout = QVBoxLayout(ControlPanel)
+        ControlPanelLayout.setContentsMargins(0, 0, 0, 0)
+        ControlPanelLayout.setSpacing(0)
+        
+        ControlPanelLayout.addWidget(self.OscilloscopePanel, 3) #Reminder to tweak these later (TODO)
+        ControlPanelLayout.addWidget(self.SimulationPanel, 1)
+        ControlPanelLayout.addWidget(self.PlaceHolder, 6)
+        
+        #--------------------------------------------------#
+        
+        MainPanel = QWidget()
+        MainPanelLayout = QHBoxLayout(MainPanel)
+        MainPanelLayout.setContentsMargins(0, 0, 0, 0)
+        MainPanelLayout.setSpacing(0)
+ 
+        MainPanelLayout.addWidget(PalettePanel, 3) #These ones too ^^^^^
+        MainPanelLayout.addWidget(CanvasPanel, 14)
+        MainPanelLayout.addWidget(ControlPanel, 4)
+    
+        #---------------------------------------------------#
+    
         ScreenPanel = QWidget()
-        ScreenPanelLayout = QHBoxLayout(ScreenPanel)
+        ScreenPanelLayout = QVBoxLayout(ScreenPanel)
         ScreenPanelLayout.setContentsMargins(0, 0, 0, 0)
         ScreenPanelLayout.setSpacing(0)
  
-        ScreenPanelLayout.addWidget(ControlPanel, 1)
-        ScreenPanelLayout.addWidget(CanvasPanel, 4)
+        ScreenPanelLayout.addWidget(self.ToolBar, 2)
+        ScreenPanelLayout.addWidget(MainPanel, 24)
+        ScreenPanelLayout.addWidget(self.StatusBar, 1)
  
         ScreenPanel.setStyleSheet("background-color: #001733;")
  
