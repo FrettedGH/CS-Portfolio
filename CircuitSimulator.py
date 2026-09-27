@@ -2,8 +2,8 @@ import sys
 import json
 import heapq
 
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGraphicsView, QGraphicsScene
-from PySide6.QtCore import Qt, QObject, Signal
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGraphicsView, QGraphicsScene, QPushButton, QComboBox, QDoubleSpinBox
+from PySide6.QtCore import Qt, QObject, Signal, QTimer
 
 from numpy import linalg, zeros
 from collections import deque
@@ -547,6 +547,69 @@ class SceneAdapter(QObject):
                 
             self.AcceptedStep.emit(self.Scene.SimulationTime)
  
+#Roles of Adapters => Logic portions of GUI that isn't visual stuff, that should be handled by the CanvasScene/Items - I think 
+
+#-----------------------------------------------------------------------------------------------------------------------------------------#
+
+class SimulationController(QObject): #Come back to this one (TODO) -> Might need some major restructing if I decide to change how timings work....
+    
+    SpeedOptions = [1, 2, 5, 10, 25, 100]
+    TickIntervalMilliseconds = 33 
+    
+    Ticked = Signal(float)
+    RunningChanged = Signal(bool)
+    ErrorRaised = Signal(list)
+    
+    def __init__(self, SceneAdapterInstance):
+        super().__init__()
+        
+        self.SceneAdapter = SceneAdapterInstance
+        self.SpeedMultiplier = self.SpeedOptions[0]
+        self.Running = False
+        
+        self.Timer = QTimer()
+        self.Timer.setInterval(self.TickIntervalMilliseconds)
+        self.Timer.timeout.connect(self.Tick)
+        
+    def PlaySimulation(self):
+        self.Running = True
+        self.RunningChanged.emit(True)
+        self.Timer.start()
+        
+    def PauseSimulation(self):
+        self.Running = False
+        self.RunningChanged.emit(True)
+        self.Timer.stop()        
+        
+    def StepOnce(self): #Debugging come back to this (TODO) - Might include it as a feature
+        return self.RunSteps(1)
+    
+    def SetSpeed(self, Multiplier):
+        if Multiplier not in self.SpeedOptions:
+            raise ValueError(f"Unsupported speed multiplier: {str(Multiplier)}")
+        self.SpeedMultiplier = Multiplier
+        
+    def SetTimeStep(self, TimeStep):
+        self.SceneAdapter.Scene.TimeStep = TimeStep
+        
+    def Tick(self):
+        self.RunSteps(self.SpeedMultiplier)
+        
+    def RunSteps(self, Steps):
+        Success = self.SceneAdapter.Step(Steps)
+ 
+        if not Success:
+            self.ErrorRaised.emit(list(self.SceneAdapter.Scene.Errors))
+            self.Pause()
+            return False
+ 
+        self.Ticked.emit(self.SceneAdapter.Scene.SimulationTime)
+        return True
+        
+class CanvasScene(QGraphicsScene):
+    def __init__():
+        pass
+
 #-----------------------------------------------------------------------------------------------------------------------------------------#
 
 class CategoryBar(QWidget):
@@ -580,14 +643,76 @@ class OscilloscopePanel(QWidget):
         Layout.addWidget(QLabel("Oscilloscope"))
 
 class SimulationPanel(QWidget):
-    def __init__(self):
+    def __init__(self, ControllerInstance):
         super().__init__()
+        
+        self.Controller = ControllerInstance
         
         self.setStyleSheet("background-color: #001C40; color: #79ccff; margin: 5px")
         
+        self.PlayPauseButton = QPushButton("Play")
+        self.StepButton = QPushButton("Step")
+        
+        self.SpeedBox = QComboBox()
+        for Multiplier in self.Controller.SpeedOptions:
+            self.SpeedBox.addItem(f"{Multiplier}x")
+
+        self.TimeStepBox = QDoubleSpinBox()
+        self.TimeStepBox.setDecimals(6)
+        self.TimeStepBox.setRange(1e-6, 1.0)
+        self.TimeStepBox.setSingleStep(1e-5)
+        self.TimeStepBox.setValue(self.Controller.SceneAdapter.Scene.TimeStep)       
+        
+        self.TimeLabel = QLabel("t = 0.000000 s")
+        
+        ControlBox = QHBoxLayout()
+        ControlBox.addWidget(self.PlayPauseButton)
+        ControlBox.addWidget(self.StepButton)
+        
+        SpeedBox = QHBoxLayout()
+        SpeedBox.addWidget(QLabel("Speed: "))
+        SpeedBox.addWidget(self.SpeedBox)
+        
+        SimulationBox = QHBoxLayout()
+        SimulationBox.addWidget(QLabel("Timestep: "))        
+        SimulationBox.addWidget(self.TimeStepBox)
+        
         Layout = QVBoxLayout(self)
         Layout.setContentsMargins(0, 0, 0, 0)
-        Layout.addWidget(QLabel("SimulationPanel"))
+        Layout.addLayout(ControlBox)
+        Layout.addLayout(SpeedBox)
+        Layout.addLayout(SimulationBox)
+        Layout.addWidget(self.TimeLabel)
+        
+        #-----------------------------------------------------------------------#
+        
+        self.PlayPauseButton.clicked.connect(self.OnPlayPauseClicked)
+        self.StepButton.clicked.connect(self.Controller.StepOnce)
+        self.SpeedBox.currentIndexChanged.connect(self.OnSpeedChanged)
+        self.TimeStepBox.valueChanged.connect(self.Controller.SetTimeStep)
+ 
+        self.Controller.RunningChanged.connect(self.OnRunningChanged)
+        self.Controller.Ticked.connect(self.OnTicked)
+        self.Controller.ErrorRaised.connect(self.OnError)
+        
+    def OnPlayPauseClicked(self):
+        if self.Controller.Running:
+            self.Controller.Pause()
+        else:
+            self.Controller.Play()
+        
+    def OnSpeedChanged(self, Index):
+        self.Controller.SetSpeed(self.SpeedBox.itemData(Index))        
+        
+    def OnRunningChanged(self, Running):
+        self.PlayPauseButton.setText("Pause" if Running else "Play")
+        self.StepButton.setEnabled(not Running)        
+        
+    def OnTicked(self, Time):
+        self.TimeLabel.setText(f"t = {Time:.6f}s")
+        
+    def OnError(self, Errors):
+        self.TimeLabel.setText(f"Error {Errors}")        
     
 class ToolBar(QWidget):
     def __init__(self):
@@ -608,7 +733,7 @@ class StatusBar(QWidget):
         Layout = QVBoxLayout(self)
         Layout.setContentsMargins(0, 0, 0, 0)
         Layout.addWidget(QLabel("StatusBar"))
-    
+
 class CanvasView(QGraphicsView):
     def __init__(self):
         super().__init__()
@@ -658,9 +783,12 @@ class MainWindow(QMainWindow):
         CanvasPanelLayout.addWidget(self.CanvasView)
         
         #--------------------------------------------------#
+        self.SceneAdapter = SceneAdapter()
+        self.Controller = SimulationController(self.SceneAdapter)
+        
         
         self.OscilloscopePanel = OscilloscopePanel()
-        self.SimulationPanel = SimulationPanel()
+        self.SimulationPanel = SimulationPanel(self.Controller)
         self.PlaceHolder = QWidget()
         
         ControlPanel = QWidget()
