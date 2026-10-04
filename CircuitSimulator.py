@@ -1,19 +1,19 @@
 import sys
 import json
 import heapq
-
+ 
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGraphicsView, QGraphicsScene, QPushButton, QComboBox, QDoubleSpinBox
 from PySide6.QtCore import Qt, QObject, Signal, QTimer
-
+ 
 from numpy import linalg, zeros
 from collections import deque
-
+ 
 class Scene():
     def __init__(self):
         self.Components = []
         self.Connections = []
-
-        self.Nodes = []
+ 
+        self.Nodes = [] 
         self.Circuits = []
         
         self.Solver = Solver()
@@ -26,7 +26,7 @@ class Scene():
     def addComponent(self, ComponentInstance):
         self.Components.append(ComponentInstance)
         ComponentInstance.Scene = self
-        self.unresolvedTopology = True
+        self.UnresolvedTopology = True
         return ComponentInstance
         
     def removeComponent(self, ComponentInstance):
@@ -36,14 +36,14 @@ class Scene():
                 
         self.Components.remove(ComponentInstance)
         ComponentInstance.Scene = None
-        self.unresolvedTopology = True
+        self.UnresolvedTopology = True
         
     def addConnection(self, TerminalA, TerminalB):
         NewConnection = Connection(TerminalA, TerminalB)
         TerminalA.Connections.append(NewConnection)
         TerminalB.Connections.append(NewConnection)
         self.Connections.append(NewConnection)
-        self.unresolvedTopology = True
+        self.UnresolvedTopology = True
         
     def removeConnection(self, TerminalA, TerminalB):
         for ConnectionInstance in list(TerminalA.Connections):
@@ -51,10 +51,10 @@ class Scene():
                 self.Connections.remove(ConnectionInstance)
                 TerminalA.Connections.remove(ConnectionInstance)
                 TerminalB.Connections.remove(ConnectionInstance)
-        self.unresolvedTopology = True
+        self.UnresolvedTopology = True
     
     def updateScene(self):
-        if self.unresolvedTopology == True:
+        if self.UnresolvedTopology == True:
             
             for ComponentInstance in self.Components:
                 ComponentInstance.Circuit = None
@@ -78,7 +78,7 @@ class Scene():
                     NewCircuit.updateCircuit(NodeInstance)
                     self.Circuits.append(NewCircuit)
                     
-            self.unresolvedTopology = False
+            self.UnresolvedTopology = False
             
     def SimulationStep(self, Steps = 1):
         self.updateScene()
@@ -95,6 +95,12 @@ class Scene():
             self.SimulationTime += self.TimeStep
             
         return True
+    
+    def ResetSimulation(self):
+        self.SimulationTime = 0.0
+        
+        for ComponentInstance in self.Components:
+            ComponentInstance.resetState()
     
 class Solver():
     def __init__(self):
@@ -165,7 +171,7 @@ class Solver():
             return 0.0
         else:
             return float(self.Solution[Index])
-
+ 
     def getBranchCurrent(self, ComponentInstance, Number = 0):
         return float(self.Solution[self.getBranchIndex(ComponentInstance, Number)])
     
@@ -268,13 +274,13 @@ class Connection():
     def __init__(self, TerminalA, TerminalB):
         self.TerminalA = TerminalA
         self.TerminalB = TerminalB
-
+ 
     def getRemoteTerminal(self, TerminalInstance):
         if TerminalInstance is self.TerminalA:
             return self.TerminalB
         if TerminalInstance is self.TerminalB:
             return self.TerminalA
-
+ 
 class Terminal():
     def __init__(self, ComponentInstance):
         self.Component = ComponentInstance
@@ -292,6 +298,11 @@ class Component():
         self.Current = None
         self.Power = None
         
+    def resetState(self):
+        self.Voltage = 0.0
+        self.Current = 0.0
+        self.Power = 0.0
+        
     def addTerminal(self):
         NewTerminal = Terminal(self)
         self.Terminals.append(NewTerminal)
@@ -307,7 +318,7 @@ class Component():
         self.Voltage = Voltage
         self.Current = Current
         self.Power = Voltage * Current
-
+ 
 class VoltageSource(Component):
     BranchCount = 1
     def __init__(self):
@@ -332,7 +343,7 @@ class VoltageSource(Component):
         Current = Solver.getBranchCurrent(self)
         
         self.setResult(Voltage, Current)
-
+ 
 class CurrentSource(Component):
     def __init__(self):
         super().__init__()
@@ -350,10 +361,10 @@ class CurrentSource(Component):
         
     def updateComponent(self, Solver):
         Voltage = Solver.getVoltage(self.Positive) - Solver.getVoltage(self.Negative)
-        Current = -self.SourceCurrent
+        Current = -self.SourceCurrent #DO NOT TOUCH THIS, all currentsources break if not negative fsr...
         
         self.setResult(Voltage, Current)
-
+ 
 class Resistor(Component):
     def __init__(self):
         super().__init__()
@@ -390,7 +401,7 @@ class Capacitor(Component):
         
     def setCapacitance(self, Capacitance):
         self.Capacitance = Capacitance
-
+ 
     def stampComponent(self, Solver):
         Conductance = self.Capacitance / Solver.TimeStep
         Equivalent = Conductance * self.PreviousVoltage
@@ -406,6 +417,10 @@ class Capacitor(Component):
  
         self.setResult(Voltage, Current)
         self.PreviousVoltage = Voltage
+        
+    def resetState(self):
+        super().resetState()
+        self.PreviousVoltage = 0.0
         
 class Inductor(Component):
     BranchCount = 1
@@ -436,6 +451,10 @@ class Inductor(Component):
         
         self.setResult(Voltage, Current)
         self.PreviousCurrent = Current
+        
+    def resetState(self):
+        super().resetState()
+        self.PreviousCurrent = 0.0
     
 #Backend scene tickets
 #Ground (need to implement a one-pin component instead of selecting first node)
@@ -443,14 +462,15 @@ class Inductor(Component):
 #Adding semiconductors
 #Multi-terminal components } Transistors/semiconductors
 #Dynami component clamping
-
+#Debug resetting simulation time A LOT, very unstable rn, might blow (TODO)
+ 
 #-----------------------------------------------------------------------------------------------------------------------------------------#
-
+ 
 class ComponentAdapter(QObject):
     
     ValueChanged = Signal()
     Updated = Signal()
-
+ 
     def __init__(self, ComponentInstance):
         super().__init__()
         
@@ -461,10 +481,14 @@ class ComponentAdapter(QObject):
                 
     def RecordStep(self, Time):
         self.History.append((Time, self.Component.Voltage, self.Component.Current))
-
+ 
         while self.History and (Time - self.History[0][0]) > self.HistoryDuration:
             self.History.popleft()
-
+ 
+        self.Updated.emit()
+        
+    def ClearHistory(self):
+        self.History.clear()
         self.Updated.emit()
         
 class VoltageSourceAdapter(ComponentAdapter):
@@ -476,7 +500,7 @@ class CurrentSourceAdapter(ComponentAdapter):
     def setCurrent(self, Current):
         self.Component.setCurrent(Current)
         self.ValueChanged.emit()        
-
+ 
 class ResistorAdapter(ComponentAdapter):
     def setResistance(self, Resistance):
         self.Component.setResistance(Resistance)
@@ -494,10 +518,10 @@ class InductorAdapter(ComponentAdapter):
    
 class SceneAdapter(QObject):
     
-    ComponentAdded = Signal()
-    ComponentRemoved = Signal()
-    AcceptedStep = Signal()
-    ErrorRaised = Signal()
+    ComponentAdded = Signal(QObject)
+    ComponentRemoved = Signal(QObject)
+    AcceptedStep = Signal(float)
+    ErrorRaised = Signal(list)
     
     ComponentTypes = {"VoltageSource": (VoltageSource, VoltageSourceAdapter),
                       "CurrentSource": (CurrentSource, CurrentSourceAdapter),
@@ -534,26 +558,34 @@ class SceneAdapter(QObject):
         self.Scene.addConnection(TerminalA, TerminalB)
     
     def deleteConnection(self, TerminalA, TerminalB):
-        self.Scene.addConnection(TerminalA, TerminalB)
+        self.Scene.removeConnection(TerminalA, TerminalB)
     
     def SimulationStep(self, Steps = 1):
         for Step in range(Steps):
             if not self.Scene.SimulationStep(1):
                 self.ErrorRaised.emit(list(self.Scene.Errors))
                 return False
-
+ 
             for ComponentAdapterInstance in self.ComponentAdapters:
                 ComponentAdapterInstance.RecordStep(self.Scene.SimulationTime)
                 
             self.AcceptedStep.emit(self.Scene.SimulationTime)
+            return True
+        
+    def ResetSimulation(self):
+        self.Scene.ResetSimulation()
+        
+        for ComponentAdapterInstance in self.ComponentAdapters:
+            ComponentAdapterInstance.ClearHistory()
+            
+        self.AcceptedStep.emit(self.Scene.SimulationTime)
  
-#Roles of Adapters => Logic portions of GUI that isn't visual stuff, that should be handled by the CanvasScene/Items - I think 
-
+#Roles of Adapters => Logic portions of GUI that isn't visual stuff, that should be handled by the CanvasScene/Items - I think (These are just wrappers)
+ 
 #-----------------------------------------------------------------------------------------------------------------------------------------#
-
-class SimulationController(QObject): #Come back to this one (TODO) -> Might need some major restructing if I decide to change how timings work....
+ 
+class SimulationController(QObject): #Come back to this one (TODO) -> Might need some major restructing if I decide to change how timings work...
     
-    SpeedOptions = [1, 2, 5, 10, 25, 100]
     TickIntervalMilliseconds = 33 
     
     Ticked = Signal(float)
@@ -564,31 +596,45 @@ class SimulationController(QObject): #Come back to this one (TODO) -> Might need
         super().__init__()
         
         self.SceneAdapter = SceneAdapterInstance
-        self.SpeedMultiplier = self.SpeedOptions[0]
+        self.SpeedOptions = [0.1, 0.25, 0.5, 1, 2, 4, 10]
+        self.SpeedMultiplier = self.SpeedOptions[3]
         self.Running = False
         
         self.Timer = QTimer()
         self.Timer.setInterval(self.TickIntervalMilliseconds)
         self.Timer.timeout.connect(self.Tick)
         
-    def PlaySimulation(self):
+    def PlaySimulation(self): 
         self.Running = True
         self.RunningChanged.emit(True)
         self.Timer.start()
         
     def PauseSimulation(self):
         self.Running = False
-        self.RunningChanged.emit(True)
+        self.RunningChanged.emit(False)
         self.Timer.stop()        
         
-    def StepOnce(self): #Debugging come back to this (TODO) - Might include it as a feature
+    def StepForward(self): #Debugging come back to this (TODO) - Might include it as a feature
         return self.RunSteps(1)
     
-    def SetSpeed(self, Multiplier):
-        if Multiplier not in self.SpeedOptions:
-            raise ValueError(f"Unsupported speed multiplier: {str(Multiplier)}")
-        self.SpeedMultiplier = Multiplier
+    def StepBackward(self): #Figuting out ways: Checkpoint intervals from forward? Reverse analysis? Time History?
+        pass
+    
+    #def SetSpeed(self, Multiplier):
+    #    if Multiplier not in self.SpeedOptions:
+    #        raise ValueError(f"Unsupported speed multiplier: {str(Multiplier)}")
+    #    self.SpeedMultiplier = Multiplier
         
+    def SpeedUp(self):
+        Index = self.SpeedOptions.index(self.SpeedMultiplier)
+        if Index < len(self.SpeedOptions) - 1:
+            self.SpeedMultiplier = self.SpeedOptions[Index + 1]
+ 
+    def SpeedDown(self):
+        Index = self.SpeedOptions.index(self.SpeedMultiplier)
+        if Index > 0:
+            self.SpeedMultiplier = self.SpeedOptions[Index - 1]
+            
     def SetTimeStep(self, TimeStep):
         self.SceneAdapter.Scene.TimeStep = TimeStep
         
@@ -596,7 +642,7 @@ class SimulationController(QObject): #Come back to this one (TODO) -> Might need
         self.RunSteps(self.SpeedMultiplier)
         
     def RunSteps(self, Steps):
-        Success = self.SceneAdapter.Step(Steps)
+        Success = self.SceneAdapter.SimulationStep(Steps)
  
         if not Success:
             self.ErrorRaised.emit(list(self.SceneAdapter.Scene.Errors))
@@ -605,13 +651,18 @@ class SimulationController(QObject): #Come back to this one (TODO) -> Might need
  
         self.Ticked.emit(self.SceneAdapter.Scene.SimulationTime)
         return True
+    
+    def ResetSimulation(self):
+        self.PauseSimulation()
+        self.SceneAdapter.ResetSimulation()
+        self.Ticked.emit(self.SceneAdapter.Scene.SimulationTime)
         
 class CanvasScene(QGraphicsScene):
     def __init__():
         pass
-
+ 
 #-----------------------------------------------------------------------------------------------------------------------------------------#
-
+ 
 class CategoryBar(QWidget):
     def __init__(self):
         super().__init__()
@@ -631,7 +682,7 @@ class ComponentBar(QWidget):
         Layout = QVBoxLayout(self)
         Layout.setContentsMargins(0, 0, 0, 0)
         Layout.addWidget(QLabel("Component Bar"))        
-
+ 
 class OscilloscopePanel(QWidget):
     def __init__(self):
         super().__init__()
@@ -641,7 +692,7 @@ class OscilloscopePanel(QWidget):
         Layout = QVBoxLayout(self)
         Layout.setContentsMargins(0, 0, 0, 0)
         Layout.addWidget(QLabel("Oscilloscope"))
-
+ 
 class SimulationPanel(QWidget):
     def __init__(self, ControllerInstance):
         super().__init__()
@@ -656,7 +707,7 @@ class SimulationPanel(QWidget):
         self.SpeedBox = QComboBox()
         for Multiplier in self.Controller.SpeedOptions:
             self.SpeedBox.addItem(f"{Multiplier}x")
-
+ 
         self.TimeStepBox = QDoubleSpinBox()
         self.TimeStepBox.setDecimals(6)
         self.TimeStepBox.setRange(1e-6, 1.0)
@@ -684,10 +735,10 @@ class SimulationPanel(QWidget):
         Layout.addLayout(SimulationBox)
         Layout.addWidget(self.TimeLabel)
         
-        #-----------------------------------------------------------------------#
+        #-----------------------------------------------------------------------# Rework Majorly needed here (TODO)
         
         self.PlayPauseButton.clicked.connect(self.OnPlayPauseClicked)
-        self.StepButton.clicked.connect(self.Controller.StepOnce)
+        self.StepButton.clicked.connect(self.Controller.StepForward)
         self.SpeedBox.currentIndexChanged.connect(self.OnSpeedChanged)
         self.TimeStepBox.valueChanged.connect(self.Controller.SetTimeStep)
  
@@ -697,12 +748,12 @@ class SimulationPanel(QWidget):
         
     def OnPlayPauseClicked(self):
         if self.Controller.Running:
-            self.Controller.Pause()
+            self.Controller.PauseSimulation()
         else:
-            self.Controller.Play()
+            self.Controller.PlaySimulation()
         
     def OnSpeedChanged(self, Index):
-        self.Controller.SetSpeed(self.SpeedBox.itemData(Index))        
+        self.Controller.SetSpeed(self.SpeedBox.itemData(Index))     
         
     def OnRunningChanged(self, Running):
         self.PlayPauseButton.setText("Pause" if Running else "Play")
@@ -712,7 +763,10 @@ class SimulationPanel(QWidget):
         self.TimeLabel.setText(f"t = {Time:.6f}s")
         
     def OnError(self, Errors):
-        self.TimeLabel.setText(f"Error {Errors}")        
+        if Errors != []:
+            self.TimeLabel.setText(f"Error: {Errors[0]}")
+        else:
+            self.TimeLabel.setText("Error: Unknown simulation error")     
     
 class ToolBar(QWidget):
     def __init__(self):
@@ -733,7 +787,7 @@ class StatusBar(QWidget):
         Layout = QVBoxLayout(self)
         Layout.setContentsMargins(0, 0, 0, 0)
         Layout.addWidget(QLabel("StatusBar"))
-
+ 
 class CanvasView(QGraphicsView):
     def __init__(self):
         super().__init__()
@@ -744,7 +798,7 @@ class CanvasView(QGraphicsView):
         self.setScene(self.CanvasScene)
         
 #------------------------------------------------------------------------------------------------------------------------------------------#
-
+ 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
