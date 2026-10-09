@@ -2,16 +2,16 @@ function LinearSolve(Matrix, Vector) {
     
     const Size = Vector.length;
  
-    const Matrix = Matrix.map(Row => Row.slice());     // Clones of the matrix and vectors [DO NOT TOUCH]
-    const Vector = Vector.slice();
+    const CarrierMatrix = Matrix.map(Row => Row.slice());     // Clones of the matrix and vectors [DO NOT TOUCH]
+    const CarrierVector = Vector.slice();
  
     for (let PivotPosition = 0; PivotPosition < Size; PivotPosition++) {
         let PivotRow = PivotPosition;
-        let PivotValue = Math.abs(Matrix[PivotPosition][PivotPosition]);
+        let PivotValue = Math.abs(CarrierMatrix[PivotPosition][PivotPosition]);
  
         for (let RowIndex = PivotPosition + 1; RowIndex < Size; RowIndex++) {
-            if (Math.abs(Matrix[RowIndex][PivotPosition]) > PivotValue) {
-                PivotValue = Math.abs(Matrix[RowIndex][PivotPosition]);
+            if (Math.abs(CarrierMatrix[RowIndex][PivotPosition]) > PivotValue) {
+                PivotValue = Math.abs(CarrierMatrix[RowIndex][PivotPosition]);
                 PivotRow = RowIndex;
             }
         }
@@ -21,27 +21,27 @@ function LinearSolve(Matrix, Vector) {
         }
  
         if (PivotRow !== PivotPosition) {
-            [Matrix[PivotPosition], Matrix[PivotRow]] = [Matrix[PivotRow], Matrix[PivotPosition]];
-            [Vector[PivotPosition], Vector[PivotRow]] = [Vector[PivotRow], Vector[PivotPosition]];
+            [CarrierMatrix[PivotPosition], CarrierMatrix[PivotRow]] = [CarrierMatrix[PivotRow], CarrierMatrix[PivotPosition]];
+            [CarrierVector[PivotPosition], CarrierVector[PivotRow]] = [CarrierVector[PivotRow], CarrierVector[PivotPosition]];
         }
  
         for (let RowIndex = PivotPosition + 1; RowIndex < Size; RowIndex++) {
-            const Factor = Matrix[RowIndex][PivotPosition] / Matrix[PivotPosition][PivotPosition];
+            const Factor = CarrierMatrix[RowIndex][PivotPosition] / CarrierMatrix[PivotPosition][PivotPosition];
             for (let ColumnIndex = PivotPosition; ColumnIndex < Size; ColumnIndex++) {
-                Matrix[RowIndex][ColumnIndex] -= Factor * Matrix[PivotPosition][ColumnIndex];
+                CarrierMatrix[RowIndex][ColumnIndex] -= Factor * CarrierMatrix[PivotPosition][ColumnIndex];
             }
-            Vector[RowIndex] -= Factor * Vector[PivotPosition];
+            CarrierVector[RowIndex] -= Factor * CarrierVector[PivotPosition];
         }
-    }
+    } 
  
     const Solution = new Array(Size).fill(0);
  
     for (let PivotPosition = Size - 1; PivotPosition >= 0; PivotPosition--) {
-        let Sum = Vector[PivotPosition];
+        let Sum = CarrierVector[PivotPosition];
         for (let ColumnIndex = PivotPosition + 1; ColumnIndex < Size; ColumnIndex++) {
-            Sum -= Matrix[PivotPosition][ColumnIndex] * Solution[ColumnIndex];
+            Sum -= CarrierMatrix[PivotPosition][ColumnIndex] * Solution[ColumnIndex];
         }
-        Solution[PivotPosition] = Sum / Matrix[PivotPosition][PivotPosition];
+        Solution[PivotPosition] = Sum / CarrierMatrix[PivotPosition][PivotPosition];
     }
  
     return Solution;
@@ -92,7 +92,7 @@ class Solver {
         }
  
         try {
-            this.Solution = Size > 0 ? linSolve(this.Matrix, this.Vector) : [];
+            this.Solution = Size > 0 ? LinearSolve(this.Matrix, this.Vector) : [];
         } catch (Error_) {
             CircuitInstance.Error = "Circuit cannot be solved (shorted or parallel voltage sources, or a floating part)";
             return false;
@@ -166,4 +166,4 @@ class Solver {
     }
 }
  
-module.exports = { Solver, linSolve };
+module.exports = { Solver, LinearSolve };
