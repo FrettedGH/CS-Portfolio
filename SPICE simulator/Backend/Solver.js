@@ -46,6 +46,7 @@ function LinearSolve(Matrix, Vector) {
  
     return Solution;
 }
+
  
 //-----------------------------------------------------------------------------------------------------------//
 
@@ -60,6 +61,9 @@ class Solver {
         this.Matrix = null;
         this.Vector = null;
         this.Solution = null;
+
+        this.MaxIterations = 100;
+        this.Tolerance = 1e-6; // (In microvolts resolution)
     }
  
     Solve(CircuitInstance, TimeStep) {
@@ -84,34 +88,64 @@ class Solver {
             }
         }
  
-        this.Matrix = Array.from({ length: Size }, () => new Array(Size).fill(0));
-        this.Vector = new Array(Size).fill(0);
- 
-        for (const ComponentInstance of CircuitInstance.Components) {
-            ComponentInstance.Stamp(this);
+        if (!this.Solution || this.Solution.length !== Size ) {
+            this.Solution = new Array(Size).fill(0.0);
         }
- 
-        try {
-            this.Solution = Size > 0 ? LinearSolve(this.Matrix, this.Vector) : [];
-        } catch (Error_) {
-            CircuitInstance.Error = "Circuit cannot be solved (shorted or parallel voltage sources, or a floating part)";
+
+        let Converged = false;
+
+        for (let Iteration = 0; Iteration < this.MaxIterations; Iteration++) {
+            this.Matrix = Array.from({ length: Size }, () => new Array(Size).fill(0));
+            this.Vector = new Array(Size).fill(0);
+
+            for (const ComponentInstance of CircuitInstance.Components) {
+                ComponentInstance.Stamp(this);
+            }
+
+            let NewSolution;
+
+            try {
+                NewSolution = Size > 0 ? LinearSolve(this.Matrix, this.Vector) : [];
+            } catch (ErrorInstance) {
+                CircuitInstance.Error = "Circuit cannot be solved (shorted or parallel voltage sources, or a floating part)";
+                return false;
+            }
+
+            let MaxDelta = 0.0;
+
+            for (let Index = 0; Index < this.NodeIndexes.Size; Index++) {
+                const Delta = Math.abs(NewSolution[Index] - this.Solution[Index]);
+                if (Delta > MaxDelta) MaxDelta = Delta;
+            }
+
+            this.Solution = NewSolution
+
+            for (const [NodeInstance, Index] of this.NodeIndexes) {
+                NodeInstance.Voltage = this.Solution[Index];
+            }
+    
+            CircuitInstance.Ground.Voltage = 0.0;
+
+            if (MaxDelta < this.Tolerance) {
+                Converged = true;
+                break;
+            }
+        }
+
+        if (Converged === false) {
+            CircuitInstance.Error = "Newton-Raphson solver failed to converge";
             return false;
         }
- 
-        for (const [NodeInstance, Index] of this.NodeIndexes) {
-            NodeInstance.Voltage = this.Solution[Index];
-        }
- 
-        CircuitInstance.Ground.Voltage = 0.0;
- 
+    
         for (const ComponentInstance of CircuitInstance.Components) {
             ComponentInstance.updateComponent(this);
         }
  
-        CircuitInstance.Error = null;
-        return true;
+    CircuitInstance.Error = null;
+    return true;
+
     }
- 
+    
 //------------------------------------------------------------------------------------------------------------//
 
     getNodeIndex(TerminalInstance) {
