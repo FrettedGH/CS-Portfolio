@@ -64,6 +64,7 @@ class Solver {
         this.MaxIterations = 100;
         this.Tolerance = 1e-6; // (In microvolts resolution)
         this.MinConductance = 1e-12;
+        this.MaxVoltage = 1e6;
 
         this.Limited = false;
     }
@@ -159,6 +160,16 @@ class Solver {
             CircuitInstance.Error = "Newton-Raphson solver failed to converge";
             return false;
         }
+
+        let MaxAbsVoltage = 0.0;
+        for (let Index = 0; Index < NodeCount; Index++) {
+            MaxAbsVoltage = Math.max(MaxAbsVoltage, Math.abs(this.Solution[Index]));
+        }
+
+        if (MaxAbsVoltage > this.MaxVoltage) {
+            CircuitInstance.Error = "Node voltage error: a node is floating or a current source has no return path";
+            return false;
+        }
     
         for (const ComponentInstance of CircuitInstance.Components) {
             ComponentInstance.updateComponent(this);
@@ -166,7 +177,6 @@ class Solver {
  
     CircuitInstance.Error = null;
     return true;
-
     }
     
 //------------------------------------------------------------------------------------------------------------//
