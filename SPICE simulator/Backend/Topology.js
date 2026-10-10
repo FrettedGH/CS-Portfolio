@@ -1,9 +1,19 @@
 class Circuit {
-    constructor() {
+    constructor() { 
         this.Nodes = [];
         this.Components = [];
         this.Ground = null;      
         this.Error = null;       
+    }
+
+    validateCircuit() {
+        for (const ComponentInstance of this.Components) {
+            const Validation = ComponentInstance.validateComponent();
+            if (Validation !== null) {
+                return Validation;
+            }
+        }
+        return null;
     }
  
     updateCircuit(StartingNode) {

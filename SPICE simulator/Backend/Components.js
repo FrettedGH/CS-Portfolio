@@ -2,7 +2,8 @@ const { Terminal } = require("./Topology.js");
  
 class Component {
 
-    BranchCount = 0; //How many extra unknowns
+    BranchCount = 0; //How many extra unknowns 
+    NonLinear = false;
  
     constructor() {
         this.Terminals = [];
@@ -13,16 +14,18 @@ class Component {
         this.Current = null;
         this.Power = null;
     }
+
+    stampComponent(SolverInstance) { }
  
+    updateComponent(SolverInstance) { }
+
+    validateComponent() { }
+
     addTerminal() {
         const NewTerminal = new Terminal(this);
         this.Terminals.push(NewTerminal);
         return NewTerminal;
     }
- 
-    stampComponent(SolverInstance) { }
- 
-    updateComponent(SolverInstance) { }
  
     setResult(Voltage, Current) {
         this.Voltage = Voltage;
@@ -31,9 +34,9 @@ class Component {
     }
 
     resetState() {
-        self.Voltage = 0.0
-        self.Current = 0.0
-        self.Power = 0.0
+        this.Voltage = 0.0
+        this.Current = 0.0
+        this.Power = 0.0
     }
 }
  
@@ -51,6 +54,13 @@ class VoltageSource extends Component {
  
     setVoltage(Voltage) {
         this.SourceVoltage = Voltage;
+    }
+
+    validateComponent() {
+        if (this.SourceVoltage === null) {
+            return "Voltage source has no voltage set";
+        }
+        return null;
     }
  
     stampComponent(SolverInstance) {
@@ -72,7 +82,7 @@ class CurrentSource extends Component {
     constructor() {
         super();
  
-        this.Positive = this.addTerminal();
+        this.Positive = this.addTerminal(); 
         this.Negative = this.addTerminal();
  
         this.SourceCurrent = null;                
@@ -80,6 +90,13 @@ class CurrentSource extends Component {
  
     setCurrent(Current) {
         this.SourceCurrent = Current;
+    }
+
+    validateComponent() {
+        if (this.SourceCurrent === null) {
+            return "Current source has no current set";
+        }
+        return null;
     }
  
     stampComponent(SolverInstance) {
@@ -107,7 +124,14 @@ class Resistor extends Component {
     setResistance(Resistance) {
         this.Resistance = Resistance;
     }
- 
+
+    validateComponent() {
+        if (this.Resistance === null || this.Resistance <= 0) {
+            return "Resistance must be greater than 0";
+        }
+        return null;
+    }
+
     stampComponent(SolverInstance) {
         const Conductance = 1 / this.Resistance
 
@@ -135,7 +159,14 @@ class Capacitor extends Component {
     }
 
     setCapacitance(Capacitance) {
-        this.Capacitance = Capacitance;
+        this.Capacitance = Capacitance; 
+    }
+
+    validateComponent() {
+        if (this.Capacitance === null || this.Capacitance <= 0) {
+            return "Capacitance must be greater than 0";
+        }
+        return null;
     }
 
     stampComponent(SolverInstance) {
@@ -155,7 +186,7 @@ class Capacitor extends Component {
     }
 
     resetState() {
-        super();
+        super().resetState();
         this.PreviousVoltage = 0.0;
     }
 }
@@ -175,13 +206,21 @@ class Inductor extends Component {
         this.PreviousCurrent = 0.0;
     }
 
-    setInductance(Inductance) {
+    setInductance(Inductance) { 
         this.Inductance = Inductance;
     }
 
+    validateComponent() {
+        if (this.Inductance === null || this.Inductance <= 0) {
+            return "Inductance must be greater than 0";
+        }
+        return null;
+    }
+
+
     stampComponent(SolverInstance) {
         const Branch = SolverInstance.getBranchIndex(this);
-        const Resistance = Inductance * SolverInstance.TimeStep;
+        const Resistance = this.Inductance / SolverInstance.TimeStep;
 
         SolverInstance.stampBranch(SolverInstance.getNodeIndex(this.T1), SolverInstance.getNodeIndex(this.T2), Branch);
         SolverInstance.addMatrix(Branch, Branch, -Resistance)
@@ -197,9 +236,76 @@ class Inductor extends Component {
     }
 
     resetState() {
-        super();
+        super().resetState();
         this.PreviousCurrent = 0.0;
     }
 }
 
-module.exports = { Component, Resistor, VoltageSource, CurrentSource };
+class Diode extends Component {
+    NonLinear = true;
+    constructor() {
+        super();
+
+        this.Anode = this.addTerminal();
+        this.Cathode = this.addTerminal();
+
+        this.SaturationCurrent = 1e-14;
+        this.Ideality = 1.0;
+        this.ThermalVoltage = 0.02585;
+
+        this.IterationVoltage = 0.0;
+    }
+
+    validateComponent() {
+        if (!(this.SaturationCurrent > 0 && this.Ideality > 0 && this.ThermalVoltage > 0)) {
+            return "Diode parameters must be greater than 0";
+        }
+        return null;
+    }
+
+    stampComponent(SolverInstance) { //Schockley's equation
+        const Factor = this.ThermalVoltage * this.Ideality;
+        const CritcialVoltage = Factor * Math.log(Factor / (Math.SQRT2 * this.SaturationCurrent));
+
+        let Voltage = SolverInstance.getVoltage(this.Anode) - SolverInstance.getVoltage(this.Cathode);
+
+        if (Voltage > CriticalVoltage && Math.abs(Voltage - this.IterationVoltage) > 2 * Factor) {
+            if (this.IterationVoltage > 0) {
+                const Argument = 1 + (Voltage - this.IterationVoltage) / Factor;
+                Voltage = Argument > 0 ? this.IterationVoltage + Factor * Math.log(Argument) : CriticalVoltage;
+            } else {
+                Voltage = Factor * Math.log(Voltage / Factor);
+            }
+            SolverInstance.Limited = true;
+        }
+
+        this.IterationVoltage = Voltage;
+
+        const Exponential = Math.exp(Voltage / Factor);
+        const Current = this.SaturationCurrent * (Exponential - 1);
+        const Conductance = (this.SaturationCurrent / Factor) * Exponential;
+        const Equivalent = Current - Conductance * Voltage;
+
+        const NodeA = SolverInstance.getNodeIndex(this.Anode);
+        const NodeB = SolverInstance.getNodeIndex(this.Cathode);
+
+        SolverInstance.stampConductance(NodeA, NodeB, Conductance);
+        SolverInstance.stampCurrent(NodeA, NodeB, -Equivalent);
+    }
+
+    updateComponent(SolverInstace) {
+        const Factor = this.Ideality * this.ThermalVoltage;
+        const Voltage = SolverInstance.getVoltage(this.Anode) - SolverInstance.getVoltage(this.Cathode);
+        const Current = this.SaturationCurrent * (Math.exp(Math.min(Voltage / Factor, 100)) - 1);
+
+        this.setResult(Voltage, Current);
+    }
+
+    resetState() {
+        super.resetState();
+        this.IterationVoltage = 0.0;
+    }
+
+}
+
+module.exports = { Component, VoltageSource, CurrentSource, Resistor, Capacitor, Inductor, Diode };

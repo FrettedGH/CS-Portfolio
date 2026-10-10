@@ -1,5 +1,5 @@
 const { Node, Circuit, Connection} = require("./Topology.js")
-const { Solver } = require("./Solver.js")
+const { Solver } = require("./Solver.js") 
 
 class Scene {
     constructor() {

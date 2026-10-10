@@ -47,10 +47,9 @@ function LinearSolve(Matrix, Vector) {
     return Solution;
 }
 
- 
 //-----------------------------------------------------------------------------------------------------------//
 
-class Solver {
+class Solver { 
 
     constructor() {
         this.Circuit = null;
@@ -64,12 +63,21 @@ class Solver {
 
         this.MaxIterations = 100;
         this.Tolerance = 1e-6; // (In microvolts resolution)
+        this.MinConductance = 1e-12;
+
+        this.Limited = false;
     }
  
     Solve(CircuitInstance, TimeStep) {
         this.Circuit = CircuitInstance;
         this.TimeStep = TimeStep;
  
+        const ValidationError = CircuitInstance.validateCircuit();
+        if (ValidationError !== null) {
+            CircuitInstance.Error = ValidationError;
+            return false;
+        }
+
         this.NodeIndexes = new Map();
  
         for (const NodeInstance of CircuitInstance.Nodes) {
@@ -80,6 +88,7 @@ class Solver {
  
         this.BranchIndexes = new Map();
         let Size = this.NodeIndexes.size;
+        const NodeCount = this.NodeIndexes.size;
  
         for (const ComponentInstance of CircuitInstance.Components) {
             if (ComponentInstance.BranchCount > 0) {
@@ -92,14 +101,23 @@ class Solver {
             this.Solution = new Array(Size).fill(0.0);
         }
 
+        const NonLinear = CircuitInstance.Components.some(ComponentInstance => ComponentInstance.NonLinear);
+
+        const IterationLimit = NonLinear ? this.MaxIterations : 1;
+
         let Converged = false;
 
         for (let Iteration = 0; Iteration < this.MaxIterations; Iteration++) {
             this.Matrix = Array.from({ length: Size }, () => new Array(Size).fill(0));
             this.Vector = new Array(Size).fill(0);
+            this.Limited = false;
 
             for (const ComponentInstance of CircuitInstance.Components) {
-                ComponentInstance.Stamp(this);
+                ComponentInstance.stampComponent(this);
+            }
+
+            for (let Index = 0; Index > NodeCount; Index++) {
+                this.Matrix[Index][Index] += this.MinConductance;
             }
 
             let NewSolution;
@@ -113,7 +131,7 @@ class Solver {
 
             let MaxDelta = 0.0;
 
-            for (let Index = 0; Index < this.NodeIndexes.Size; Index++) {
+            for (let Index = 0; Index < this.NodeIndexes.size; Index++) {
                 const Delta = Math.abs(NewSolution[Index] - this.Solution[Index]);
                 if (Delta > MaxDelta) MaxDelta = Delta;
             }
@@ -125,6 +143,11 @@ class Solver {
             }
     
             CircuitInstance.Ground.Voltage = 0.0;
+
+            if (!NonLinear) {
+                Converged = true;
+                break;
+            }
 
             if (MaxDelta < this.Tolerance) {
                 Converged = true;
